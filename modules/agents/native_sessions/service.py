@@ -128,3 +128,17 @@ class AgentNativeSessionService:
                 logger.warning("Failed to hydrate %s session %s: %s", agent, native_session_id, exc)
                 return item
         return None
+
+    def is_empty_bootstrap_session(self, agent: str, native_session_id: str) -> bool:
+        """Return true only when a provider can positively identify an empty bootstrap."""
+        provider = next((item for item in self.providers if item.agent_name == agent), None)
+        if provider is None:
+            return False
+        check = getattr(provider, "is_empty_bootstrap_session", None)
+        if not callable(check):
+            return False
+        try:
+            return bool(check(native_session_id))
+        except Exception as exc:
+            logger.warning("Failed to inspect %s session %s: %s", agent, native_session_id, exc)
+            return False

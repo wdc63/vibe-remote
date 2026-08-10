@@ -53,6 +53,7 @@
   "success": {
     "settingsUpdated": "设置更新成功！",
     "cwdChanged": "工作目录已更改为：\n`{path}`",
+    "cwdReset": "已返回默认工作目录：\n`{path}`",
     "sessionResumed": "已恢复 {agent} 会话。\n会话ID：`{sessionId}`",
     "sessionResumedContinueThread": "💬 *请直接在这个线程里继续回复* 以继续该会话。",
     "sessionResumedContinueFeishuThread": "💬 *请直接回复这条消息* 以继续该会话。",
@@ -278,6 +279,7 @@
   "button": {
     "currentDir": "当前目录",
     "changeDir": "更改工作目录",
+    "defaultDir": "返回默认目录",
     "newSession": "新会话",
     "clearSession": "清除所有会话",
     "settings": "设置",

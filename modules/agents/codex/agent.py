@@ -276,6 +276,41 @@ class CodexAgent(BaseAgent):
         self._turn_registry.clear_session(base_session_id)
         logger.info("Prepared Codex runtime for resumed session %s", base_session_id)
 
+    async def validate_resume_session(
+        self,
+        *,
+        base_session_id: str,
+        session_key: str,
+        working_path: str,
+        native_session_id: str,
+    ) -> None:
+        """Verify and bind a native Codex thread before reporting success."""
+        previous_transport = self._transports.get(working_path)
+        await self.prepare_resume_binding(
+            base_session_id=base_session_id,
+            session_key=session_key,
+            working_path=working_path,
+        )
+        transport = await self._get_or_create_transport(working_path)
+        try:
+            await transport.send_request("thread/resume", {"threadId": native_session_id})
+        except Exception:
+            # Do not leave a validation-only app-server around after a failed
+            # bind. Preserve an existing shared transport for other sessions.
+            if transport is not previous_transport:
+                self._transports.pop(working_path, None)
+                self._transport_last_activity.pop(working_path, None)
+                try:
+                    await transport.stop()
+                except Exception:
+                    logger.debug("Failed to clean up failed Codex resume validation", exc_info=True)
+            raise
+
+        self._session_mgr.set_session_key(base_session_id, session_key)
+        self._session_mgr.set_cwd(base_session_id, working_path)
+        self._session_mgr.set_thread_id(base_session_id, native_session_id)
+        logger.info("Validated Codex resume target %s for session %s", native_session_id, base_session_id)
+
     async def shutdown_runtime(self) -> None:
         """Stop all app-server transports during vibe-remote shutdown."""
         if not hasattr(self, "_transport_last_activity"):
@@ -556,7 +591,15 @@ class CodexAgent(BaseAgent):
                     logger.info("Resumed Codex thread %s for session %s", thread_id, request.base_session_id)
                     return thread_id
             except Exception as e:
-                logger.warning("Failed to resume Codex thread %s: %s, starting new", persisted, e)
+                error_text = str(e)
+                if "thread not found" not in error_text.lower():
+                    if "already has an active writer" in error_text.lower():
+                        raise RuntimeError(
+                            "Codex session is already active in another Codex process; "
+                            "close that process before resuming it here"
+                        ) from e
+                    raise
+                logger.warning("Failed to resume missing Codex thread %s: %s, starting new", persisted, e)
 
         return await self._start_thread(transport, request)
 

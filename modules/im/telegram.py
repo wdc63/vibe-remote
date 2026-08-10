@@ -249,6 +249,7 @@ class TelegramBot(BaseIMClient):
                 {"command": "window", "description": "选择窗口截图"},
                 {"command": "cwd", "description": "查看当前工作目录"},
                 {"command": "setcwd", "description": "切换工作目录"},
+                {"command": "resetcwd", "description": "返回默认工作目录"},
                 {"command": "resume", "description": "恢复历史会话"},
                 {"command": "settings", "description": "打开设置"},
                 {"command": "routing", "description": "Agent/模型设置"},
@@ -788,6 +789,8 @@ class TelegramBot(BaseIMClient):
             "cwd",
             "setcwd",
             "set_cwd",
+            "resetcwd",
+            "reset_cwd",
             "bind",
             "stop",
             "screenshot",
@@ -1224,11 +1227,12 @@ class TelegramBot(BaseIMClient):
 
         agent, session_id = state.options[option_index]
         self._resume_states.pop(scope_key, None)
-        if self._controller is None or not hasattr(self._controller, "session_handler"):
+        resume_callback = getattr(self, "on_resume_session_callback", None)
+        if not callable(resume_callback):
             await self.send_message(context, f"❌ {self._t('error.resumeFailed')}")
             return
         await self._delete_interaction_message(context, state.message_id)
-        await self._controller.session_handler.handle_resume_session_submission(
+        await resume_callback(
             user_id=context.user_id,
             channel_id=context.channel_id,
             thread_id=context.thread_id,

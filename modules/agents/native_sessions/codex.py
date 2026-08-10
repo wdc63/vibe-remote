@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -54,6 +55,13 @@ class CodexNativeSessionProvider(NativeSessionProvider):
                     cwd_variants,
                 )
                 for session_id, created_ts, updated_ts, title, first_user_message, rollout_path in cursor.fetchall():
+                    tokens_used = (
+                        self._get_tokens_used(session_id)
+                        if self._has_vibe_bootstrap_marker(title, first_user_message)
+                        else None
+                    )
+                    if self._is_empty_vibe_bootstrap(title, first_user_message, rollout_path, tokens_used):
+                        continue
                     created_at = dt_from_ts(created_ts)
                     updated_at = dt_from_ts(updated_ts)
                     items.append(
@@ -75,6 +83,114 @@ class CodexNativeSessionProvider(NativeSessionProvider):
         except Exception as exc:
             logger.warning("Failed to list Codex sessions for %s: %s", working_path, exc)
         return items
+
+    @staticmethod
+    def _has_vibe_bootstrap_marker(title: str | None, first_user_message: str | None) -> bool:
+        value = str(first_user_message or "").strip()
+        return bool(
+            value
+            and value == str(title or "").strip()
+            and value.startswith("If you generate an image with Codex, include it in the final reply")
+        )
+
+    @staticmethod
+    def _rollout_has_assistant_output(rollout_path: str | None) -> bool | None:
+        """Return None when the rollout cannot be inspected safely."""
+        value = str(rollout_path or "").strip()
+        if not value:
+            return None
+        path = Path(value)
+        if not path.is_file():
+            return None
+
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(row, dict) or row.get("type") != "response_item":
+                        continue
+                    payload = row.get("payload") or {}
+                    if payload.get("type") != "message" or payload.get("role") != "assistant":
+                        continue
+                    parts = payload.get("content") or []
+                    if not isinstance(parts, list):
+                        continue
+                    for part in parts:
+                        if not isinstance(part, dict) or part.get("type") != "output_text":
+                            continue
+                        if str(part.get("text") or "").strip():
+                            return True
+        except Exception as exc:
+            logger.warning("Failed to inspect Codex rollout %s: %s", path, exc)
+            return None
+        return False
+
+    def _is_empty_vibe_bootstrap(
+        self,
+        title: str | None,
+        first_user_message: str | None,
+        rollout_path: str | None,
+        tokens_used: int | None = None,
+    ) -> bool:
+        """Identify a Vibe-created thread that never produced an assistant reply."""
+        if not self._has_vibe_bootstrap_marker(title, first_user_message):
+            return False
+        has_assistant_output = self._rollout_has_assistant_output(rollout_path)
+        if has_assistant_output is not None:
+            return not has_assistant_output
+
+        value = str(rollout_path or "").strip()
+        if not value or tokens_used != 0:
+            return False
+        try:
+            return not Path(value).exists()
+        except OSError:
+            return False
+
+    def _get_tokens_used(self, native_session_id: str) -> int | None:
+        """Read token usage when supported by the current Codex state schema."""
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    "SELECT tokens_used FROM threads WHERE id = ? LIMIT 1",
+                    (native_session_id,),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        except Exception as exc:
+            logger.warning("Failed to inspect Codex token usage for %s: %s", native_session_id, exc)
+            return None
+        if not row:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
+
+    def is_empty_bootstrap_session(self, native_session_id: str) -> bool:
+        """Check one persisted Codex thread without hiding uncertain results."""
+        if not self.db_path.exists() or not native_session_id:
+            return False
+        try:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT title, first_user_message, rollout_path
+                    FROM threads
+                    WHERE id = ?
+                    LIMIT 1
+                    """,
+                    (native_session_id,),
+                ).fetchone()
+        except Exception as exc:
+            logger.warning("Failed to inspect Codex session %s: %s", native_session_id, exc)
+            return False
+        if not row:
+            return False
+        return self._is_empty_vibe_bootstrap(*row, self._get_tokens_used(native_session_id))
 
     def hydrate_preview(self, item: NativeResumeSession) -> NativeResumeSession:
         preview = ""

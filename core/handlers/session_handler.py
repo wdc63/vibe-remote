@@ -662,6 +662,29 @@ class SessionHandler(BaseHandler):
                 working_path=working_path,
             )
 
+    async def _validate_backend_resume(
+        self,
+        agent: str,
+        *,
+        base_session_id: str,
+        session_key: str,
+        working_path: str,
+        session_id: str,
+    ) -> bool:
+        """Validate backends that can acquire a native resume binding."""
+        agent_service = getattr(self.controller, "agent_service", None)
+        backend = getattr(agent_service, "agents", {}).get(agent) if agent_service else None
+        validate = getattr(backend, "validate_resume_session", None)
+        if callable(validate):
+            await validate(
+                base_session_id=base_session_id,
+                session_key=session_key,
+                working_path=working_path,
+                native_session_id=session_id,
+            )
+            return True
+        return False
+
     async def handle_resume_session_submission(
         self,
         user_id: str,
@@ -718,6 +741,20 @@ class SessionHandler(BaseHandler):
                 codex_reasoning_effort=current_routing.codex_reasoning_effort if current_routing else None,
             )
             settings_manager.set_channel_routing(settings_key, routing)
+
+            # Telegram DMs do not create a new thread anchor. Validate Codex
+            # before sending a success message so a busy native thread cannot
+            # fall through to a silently-created duplicate.
+            prevalidated = False
+            if not self._supports_resume_threading(context, is_dm=is_dm):
+                validation_base_session_id, validation_working_path, _ = self.get_session_info(context)
+                prevalidated = await self._validate_backend_resume(
+                    agent,
+                    base_session_id=validation_base_session_id,
+                    session_key=session_key,
+                    working_path=validation_working_path,
+                    session_id=session_id,
+                )
 
             agent_label = agent.capitalize()
             preview = self._get_resume_preview(context, agent=agent, session_id=session_id)
@@ -786,12 +823,13 @@ class SessionHandler(BaseHandler):
             base_session_id = self.get_base_session_id(mapping_context)
             working_path = self.get_working_path(mapping_context)
 
-            await self._prepare_backend_for_resume(
-                agent,
-                base_session_id=base_session_id,
-                session_key=session_key,
-                working_path=working_path,
-            )
+            if not prevalidated:
+                await self._prepare_backend_for_resume(
+                    agent,
+                    base_session_id=base_session_id,
+                    session_key=session_key,
+                    working_path=working_path,
+                )
 
             # OpenCode session mappings use composite keys that include
             # working_path so that cwd changes create new sessions.
@@ -988,6 +1026,36 @@ class SessionHandler(BaseHandler):
         logger.info("Initializing session mappings from saved settings...")
 
         session_state = self.sessions.get_all_session_mappings()
+
+        service_getter = getattr(self.controller, "get_native_session_service", None)
+        native_session_service = (
+            service_getter()
+            if callable(service_getter)
+            else getattr(self.controller, "native_session_service", None)
+        )
+        is_empty_bootstrap = getattr(native_session_service, "is_empty_bootstrap_session", None)
+        if callable(is_empty_bootstrap):
+            removed_count = 0
+            for user_id, agent_map in session_state.items():
+                codex_map = agent_map.get("codex", {}) if isinstance(agent_map, dict) else {}
+                if not isinstance(codex_map, dict):
+                    continue
+                for thread_id, native_session_id in list(codex_map.items()):
+                    if not isinstance(native_session_id, str):
+                        continue
+                    if not is_empty_bootstrap("codex", native_session_id):
+                        continue
+                    self.sessions.clear_agent_session_mapping(user_id, "codex", thread_id)
+                    removed_count += 1
+                    logger.warning(
+                        "Removed empty Codex bootstrap mapping: %s -> %s (user %s)",
+                        thread_id,
+                        native_session_id,
+                        user_id,
+                    )
+            if removed_count:
+                session_state = self.sessions.get_all_session_mappings()
+                logger.info("Removed %d empty Codex bootstrap mapping(s) during startup", removed_count)
 
         restored_count = 0
         for user_id, agent_map in session_state.items():

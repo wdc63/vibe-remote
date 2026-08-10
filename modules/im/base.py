@@ -199,6 +199,8 @@ class BaseIMClient(ABC):
                 return None
             if command == "setcwd":
                 command = "set_cwd"
+            elif command == "resetcwd":
+                command = "reset_cwd"
             return command, args
 
         if allow_plain_bind and head == "bind":

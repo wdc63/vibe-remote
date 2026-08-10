@@ -11,6 +11,7 @@ from config.v2_config import (
     TelegramConfig,
     LarkConfig,
     WeChatConfig,
+    UpdateConfig,
 )
 
 
@@ -68,6 +69,7 @@ class AppCompatConfig:
     include_user_info: bool = True
     reply_enhancements: bool = True
     default_backend: str = DEFAULT_AGENT_BACKEND
+    update: UpdateConfig = field(default_factory=UpdateConfig)
 
     def enabled_platforms(self) -> list[str]:
         enabled = self.platforms.get("enabled") if isinstance(self.platforms, dict) else None
@@ -126,4 +128,5 @@ def to_app_config(v2: V2Config) -> AppCompatConfig:
         include_user_info=v2.include_user_info,
         reply_enhancements=v2.reply_enhancements,
         default_backend=v2.agents.default_backend,
+        update=v2.update,
     )

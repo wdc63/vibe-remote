@@ -52,3 +52,11 @@ def test_start_service_disables_stdout_logging_for_background_process(monkeypatc
     assert captured["stderr_name"] == "service_stderr.log"
     assert isinstance(captured["env"], dict)
     assert captured["env"]["VIBE_DISABLE_STDOUT_LOGGING"] == "1"
+
+
+def test_windows_background_process_breaks_away_from_parent_job():
+    flags = runtime._background_creationflags("nt")
+
+    assert flags & 0x00000200  # CREATE_NEW_PROCESS_GROUP
+    assert flags & 0x00000008  # DETACHED_PROCESS
+    assert flags & 0x01000000  # CREATE_BREAKAWAY_FROM_JOB

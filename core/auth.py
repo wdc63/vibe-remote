@@ -19,6 +19,7 @@ ADMIN_PROTECTED_ACTIONS: frozenset = frozenset(
         "cmd_settings",
         "cmd_routing",
         "cmd_change_cwd",
+        "cmd_reset_cwd",
         "auth_setup",
         "vibe_update_now",
         # Feishu form submit button names
@@ -29,6 +30,7 @@ ADMIN_PROTECTED_ACTIONS: frozenset = frozenset(
         # Text commands (used with _admin_guard)
         "setup",
         "set_cwd",
+        "reset_cwd",
         "settings",
         "routing",
     }

@@ -2058,6 +2058,7 @@ class _PersistentStartView(discord.ui.View):
         {
             "cmd_cwd",
             "cmd_change_cwd",
+            "cmd_reset_cwd",
             "cmd_new",
             "cmd_clear",
             "cmd_settings",

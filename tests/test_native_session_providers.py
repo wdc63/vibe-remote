@@ -195,6 +195,129 @@ def test_codex_provider_matches_windows_extended_length_cwd(tmp_path: Path) -> N
     assert items[0].working_path == working_path
 
 
+def test_codex_provider_hides_empty_vibe_bootstrap_threads(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite"
+    bootstrap = "If you generate an image with Codex, include it in the final reply"
+    empty_rollout = tmp_path / "empty.jsonl"
+    answered_rollout = tmp_path / "answered.jsonl"
+    empty_rollout.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": []},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    answered_rollout.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "real answer"}],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                title TEXT,
+                first_user_message TEXT,
+                rollout_path TEXT,
+                tokens_used INTEGER,
+                cwd TEXT,
+                archived INTEGER
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO threads (
+                id, created_at, updated_at, title, first_user_message, rollout_path, tokens_used, cwd, archived
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    "empty",
+                    1_700_000_000,
+                    1_700_000_001,
+                    bootstrap,
+                    bootstrap,
+                    str(empty_rollout),
+                    100,
+                    "/tmp/project",
+                    0,
+                ),
+                (
+                    "answered",
+                    1_700_000_002,
+                    1_700_000_003,
+                    bootstrap,
+                    bootstrap,
+                    str(answered_rollout),
+                    100,
+                    "/tmp/project",
+                    0,
+                ),
+                (
+                    "uncertain",
+                    1_700_000_004,
+                    1_700_000_005,
+                    bootstrap,
+                    bootstrap,
+                    str(tmp_path / "missing.jsonl"),
+                    100,
+                    "/tmp/project",
+                    0,
+                ),
+                (
+                    "missing-empty",
+                    1_700_000_006,
+                    1_700_000_007,
+                    bootstrap,
+                    bootstrap,
+                    str(tmp_path / "missing-empty.jsonl"),
+                    0,
+                    "/tmp/project",
+                    0,
+                ),
+            ],
+        )
+
+    provider = CodexNativeSessionProvider(db_path=str(db_path))
+    items = provider.list_metadata("/tmp/project")
+
+    assert [item.native_session_id for item in items] == ["uncertain", "answered"]
+    assert provider.is_empty_bootstrap_session("empty") is True
+    assert provider.is_empty_bootstrap_session("answered") is False
+    assert provider.is_empty_bootstrap_session("uncertain") is False
+    assert provider.is_empty_bootstrap_session("missing-empty") is True
+
+
+def test_native_session_service_checks_empty_bootstrap_session() -> None:
+    provider = SimpleNamespace(
+        agent_name="codex",
+        is_empty_bootstrap_session=lambda native_session_id: native_session_id == "empty",
+    )
+    service = AgentNativeSessionService(providers=[provider])
+
+    assert service.is_empty_bootstrap_session("codex", "empty") is True
+    assert service.is_empty_bootstrap_session("codex", "real") is False
+    assert service.is_empty_bootstrap_session("claude", "empty") is False
+
+
 def test_native_session_service_preserves_agent_visibility_when_limited() -> None:
     def _item(agent: str, prefix: str, session_id: str, sort_ts: float) -> NativeResumeSession:
         return NativeResumeSession(

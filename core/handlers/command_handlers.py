@@ -454,6 +454,7 @@ class CommandHandlers(BaseHandler):
             [
                 InlineButton(text=f"📁 {self._t('button.currentDir')}", callback_data="cmd_cwd"),
                 InlineButton(text=f"📂 {self._t('button.changeDir')}", callback_data="cmd_change_cwd"),
+                InlineButton(text=self._t("button.defaultDir"), callback_data="cmd_reset_cwd"),
             ],
             # Row 2: Session and/or Settings
             session_row,
@@ -591,36 +592,10 @@ class CommandHandlers(BaseHandler):
             old_cwd = self.controller.get_cwd(context)
             settings_manager.set_custom_cwd(settings_key, absolute_path)
 
-            # If cwd actually changed, clear cached Claude sessions so the
-            # next message creates a new session with the updated cwd.
+            # If cwd actually changed, clear cached sessions so the next
+            # message creates a new session with the updated cwd.
             if _norm_path(old_cwd) != _norm_path(absolute_path):
-                session_handler = getattr(self.controller, "session_handler", None)
-                if session_handler:
-                    # Remove cached Claude client for the old composite key
-                    old_composite = f"{session_handler.get_base_session_id(context)}:{old_cwd}"
-                    old_client = session_handler.claude_sessions.pop(old_composite, None)
-                    if old_client:
-                        logger.info(f"Removed cached Claude session for old cwd: {old_composite}")
-                        try:
-                            old_client.close()
-                        except Exception:
-                            pass
-                    old_receiver = session_handler.receiver_tasks.pop(old_composite, None)
-                    if old_receiver and not old_receiver.done():
-                        old_receiver.cancel()
-                    session_handler.clear_session_tracking(old_composite)
-
-                # Clean up Codex and OpenCode sessions for the old scope
-                session_key = self._get_session_key(context)
-                agent_service = getattr(self.controller, "agent_service", None)
-                if agent_service:
-                    for agent_name in ("codex", "opencode"):
-                        try:
-                            agent = agent_service.agents.get(agent_name)
-                            if agent:
-                                await agent.clear_sessions(session_key)
-                        except Exception as e:
-                            logger.warning(f"Failed to clear {agent_name} sessions on cwd change: {e}")
+                await self._clear_sessions_for_cwd_change(context, old_cwd)
 
             logger.info(f"User {context.user_id} changed cwd to: {absolute_path}")
 
@@ -633,6 +608,62 @@ class CommandHandlers(BaseHandler):
             logger.error(f"Error setting cwd: {e}")
             channel_context = self._get_channel_context(context)
             await im_client.send_message(channel_context, f"❌ {self._t('error.cwdSetFailed', error=str(e))}")
+
+    async def _clear_sessions_for_cwd_change(self, context: MessageContext, old_cwd: str) -> None:
+        """Discard cached backend sessions that belong to the prior directory."""
+        session_handler = getattr(self.controller, "session_handler", None)
+        if session_handler:
+            old_composite = f"{session_handler.get_base_session_id(context)}:{old_cwd}"
+            old_client = session_handler.claude_sessions.pop(old_composite, None)
+            if old_client:
+                logger.info(f"Removed cached Claude session for old cwd: {old_composite}")
+                try:
+                    old_client.close()
+                except Exception:
+                    pass
+            old_receiver = session_handler.receiver_tasks.pop(old_composite, None)
+            if old_receiver and not old_receiver.done():
+                old_receiver.cancel()
+            session_handler.clear_session_tracking(old_composite)
+
+        session_key = self._get_session_key(context)
+        agent_service = getattr(self.controller, "agent_service", None)
+        if agent_service:
+            for agent_name in ("codex", "opencode"):
+                try:
+                    agent = agent_service.agents.get(agent_name)
+                    if agent:
+                        await agent.clear_sessions(session_key)
+                except Exception as e:
+                    logger.warning(f"Failed to clear {agent_name} sessions on cwd change: {e}")
+
+    async def handle_reset_cwd(self, context: MessageContext, args: str = ""):
+        """Clear this scope's directory override and return to the global default."""
+        try:
+            im_client = self._get_im_client(context)
+            settings_manager = self._get_settings_manager(context)
+            settings_key = self._get_settings_key(context)
+            old_cwd = self.controller.get_cwd(context)
+            settings_manager.set_custom_cwd(settings_key, None)
+            default_cwd = self.controller.get_cwd(context)
+
+            if _norm_path(old_cwd) != _norm_path(default_cwd):
+                await self._clear_sessions_for_cwd_change(context, old_cwd)
+
+            logger.info("User %s reset cwd to default: %s", context.user_id, default_cwd)
+            formatter = self._get_formatter(context)
+            channel_context = self._get_channel_context(context)
+            await im_client.send_message(
+                channel_context,
+                f"✅ {self._t('success.cwdReset', path=formatter.format_code_inline(default_cwd))}",
+            )
+        except Exception as e:
+            logger.error("Error resetting cwd: %s", e)
+            channel_context = self._get_channel_context(context)
+            await self._get_im_client(context).send_message(
+                channel_context,
+                f"❌ {self._t('error.cwdSetFailed', error=str(e))}",
+            )
 
     async def handle_change_cwd_submission(
         self,

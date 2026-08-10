@@ -209,6 +209,20 @@ class CodexAgentNotificationRoutingTests(unittest.TestCase):
 
 
 class CodexAgentStopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resume_active_writer_does_not_create_duplicate_thread(self):
+        agent = object.__new__(CodexAgent)
+        agent.sessions = SimpleNamespace(get_agent_session_id=lambda *args: "thread-1")
+        agent._start_thread = AsyncMock(return_value="thread-new")
+        transport = SimpleNamespace(
+            send_request=AsyncMock(side_effect=RuntimeError("thread already has an active writer"))
+        )
+        request = SimpleNamespace(session_key="telegram::user", base_session_id="telegram_user")
+
+        with self.assertRaisesRegex(RuntimeError, "already active in another Codex process"):
+            await agent._start_or_resume_thread(transport, request)
+
+        agent._start_thread.assert_not_awaited()
+
     async def test_handle_stop_does_not_hide_turn_before_interrupt_succeeds(self):
         agent = object.__new__(CodexAgent)
         agent._session_mgr = SimpleNamespace(get_thread_id=lambda base_session_id: "thread-1")
@@ -712,9 +726,15 @@ class CodexAgentPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.dict(os.environ, {"CODEX_HOME": "/Users/test/.codex"}):
             items = agent._build_input(request)
+            expected_uri = (
+                Path(os.environ["CODEX_HOME"]).expanduser().resolve()
+                / "generated_images"
+                / "thread-id"
+                / "image-file.png"
+            ).as_uri()
 
         self.assertTrue(items[0]["text"].startswith("If you generate an image with Codex"))
-        self.assertIn("file:///Users/test/.codex/generated_images/thread-id/image-file.png", items[0]["text"])
+        self.assertIn(expected_uri, items[0]["text"])
         self.assertIn("local Codex generated_images directory", items[0]["text"])
         self.assertIn("Replace the example thread id and filename with the actual", items[0]["text"])
         self.assertIn("Never emit variables, placeholder paths, or sandbox paths like `/mnt/data/...`", items[0]["text"])

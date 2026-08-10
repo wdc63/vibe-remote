@@ -94,3 +94,20 @@ def test_to_app_config_uses_shared_agent_defaults() -> None:
     assert compat.claude.idle_timeout_seconds == DEFAULT_AGENT_IDLE_TIMEOUT_SECONDS
     assert compat.opencode is not None
     assert compat.opencode.error_retry_limit == DEFAULT_OPENCODE_ERROR_RETRY_LIMIT
+
+
+def test_to_app_config_preserves_update_settings() -> None:
+    config = V2Config(
+        mode="self_host",
+        version="v2",
+        slack=SlackConfig(),
+        runtime=RuntimeConfig(default_cwd="."),
+        agents=AgentsConfig(),
+        ui=UiConfig(),
+        update=UpdateConfig(auto_update=False, check_interval_minutes=0),
+    )
+
+    compat = to_app_config(config)
+
+    assert compat.update.auto_update is False
+    assert compat.update.check_interval_minutes == 0

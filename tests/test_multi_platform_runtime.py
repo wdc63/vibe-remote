@@ -101,6 +101,8 @@ def test_multi_settings_manager_routes_scoped_keys(tmp_path):
 
     assert manager.get_custom_cwd("wechat::user-1") == "/tmp/wx"
     assert manager.get_custom_cwd("slack::C123") == "/tmp/slack"
+    manager.set_custom_cwd("slack::C123", None)
+    assert manager.get_custom_cwd("slack::C123") is None
     assert manager.managers["slack"].sessions is manager.sessions
     assert manager.managers["wechat"].sessions is manager.sessions
 

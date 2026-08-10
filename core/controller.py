@@ -338,6 +338,7 @@ class Controller:
             "new": self._dispatch_to_controller_loop(self.command_handler.handle_new),
             "cwd": self._dispatch_to_controller_loop(self.command_handler.handle_cwd),
             "set_cwd": self._dispatch_to_controller_loop(self.command_handler.handle_set_cwd),
+            "reset_cwd": self._dispatch_to_controller_loop(self.command_handler.handle_reset_cwd),
             "resume": self._dispatch_to_controller_loop(self.command_handler.handle_resume),
             "setup": self._dispatch_to_controller_loop(self.command_handler.handle_setup),
             "settings": self._dispatch_to_controller_loop(self.settings_handler.handle_settings),

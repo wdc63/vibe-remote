@@ -72,6 +72,7 @@ def test_extract_command_action():
     assert BaseIMClient.extract_command_action("/settings") == "settings"
     assert BaseIMClient.extract_command_action("/setcwd /tmp") == "set_cwd"
     assert BaseIMClient.extract_command_action("/set_cwd /tmp") == "set_cwd"
+    assert BaseIMClient.extract_command_action("/resetcwd") == "reset_cwd"
     assert BaseIMClient.extract_command_action("bind code") == ""
     assert BaseIMClient.extract_command_action("bind code", allow_plain_bind=True) == "bind"
     assert BaseIMClient.extract_command_action("hello") == ""
@@ -82,6 +83,7 @@ def test_parse_text_command():
     assert BaseIMClient.parse_text_command("/settings") == ("settings", "")
     assert BaseIMClient.parse_text_command("/setcwd /tmp") == ("set_cwd", "/tmp")
     assert BaseIMClient.parse_text_command("/set_cwd /tmp") == ("set_cwd", "/tmp")
+    assert BaseIMClient.parse_text_command("/resetcwd") == ("reset_cwd", "")
     assert BaseIMClient.parse_text_command("bind code") is None
     assert BaseIMClient.parse_text_command("bind code", allow_plain_bind=True) == ("bind", "code")
     assert BaseIMClient.parse_text_command("hello") is None

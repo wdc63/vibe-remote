@@ -278,21 +278,44 @@ def _log_path(name: str) -> Path:
     return paths.get_runtime_dir() / name
 
 
+def _background_creationflags(platform_name: str | None = None) -> int:
+    if (platform_name or os.name) != "nt":
+        return 0
+    return (
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
+        | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000)
+    )
+
+
 def spawn_background(args, pid_path, stdout_name: str, stderr_name: str, env: dict[str, str] | None = None):
     stdout_path = _log_path(stdout_name)
     stderr_path = _log_path(stderr_name)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
     stdout = stdout_path.open("ab")
     stderr = stderr_path.open("ab")
-    process = subprocess.Popen(
-        args,
-        stdout=stdout,
-        stderr=stderr,
-        start_new_session=True,
-        cwd=str(get_working_dir()),
-        close_fds=True,
-        env=env,
-    )
+    popen_kwargs = {
+        "stdout": stdout,
+        "stderr": stderr,
+        "start_new_session": True,
+        "cwd": str(get_working_dir()),
+        "close_fds": True,
+        "env": env,
+    }
+    creationflags = _background_creationflags()
+    if creationflags:
+        # A new process group alone can remain inside the launcher's Windows
+        # job object. Break away so the service survives terminal shutdown.
+        popen_kwargs["creationflags"] = creationflags
+    try:
+        process = subprocess.Popen(args, **popen_kwargs)
+    except OSError:
+        if not creationflags:
+            raise
+        # Some managed Windows launchers forbid breakaway. Keep service start
+        # functional there, while using the stronger detachment when allowed.
+        popen_kwargs.pop("creationflags", None)
+        process = subprocess.Popen(args, **popen_kwargs)
     stdout.close()
     stderr.close()
     pid_path.write_text(str(process.pid), encoding="utf-8")

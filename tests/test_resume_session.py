@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from core.controller import Controller
@@ -74,6 +75,23 @@ class _StubNativeSessionService:
         return None
 
 
+class _StubPersistedSessions:
+    def __init__(self, mappings, empty_session_ids):
+        self.mappings = mappings
+        self.empty_session_ids = set(empty_session_ids)
+        self.cleared = []
+
+    def get_all_session_mappings(self):
+        return {
+            user_id: {agent: dict(agent_map) for agent, agent_map in agent_maps.items()}
+            for user_id, agent_maps in self.mappings.items()
+        }
+
+    def clear_agent_session_mapping(self, user_id, agent, thread_id):
+        self.cleared.append((user_id, agent, thread_id))
+        self.mappings[user_id][agent].pop(thread_id, None)
+
+
 class _StubConfig:
     def __init__(self, platform="slack"):
         self.platform = platform
@@ -111,11 +129,48 @@ class _StubController(Controller):
 
 
 class ResumeSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_restore_session_mappings_removes_only_empty_codex_bootstraps(self):
+        settings = _StubSettingsManager()
+        im_client = _StubIMClient()
+        ctrl = _StubController()
+        ctrl.init_minimal(im_client, settings, _StubConfig(platform="telegram"))
+        persisted = _StubPersistedSessions(
+            {
+                "telegram::U1": {
+                    "claude": {"telegram_U1": "claude-real"},
+                    "codex": {
+                        "telegram_U1": "codex-empty",
+                        "telegram_other": "codex-real",
+                    },
+                }
+            },
+            {"codex-empty"},
+        )
+        ctrl.sessions = persisted
+        ctrl.session_handler.sessions = persisted
+        ctrl.native_session_service = SimpleNamespace(
+            is_empty_bootstrap_session=lambda agent, session_id: (
+                agent == "codex" and session_id in persisted.empty_session_ids
+            )
+        )
+
+        ctrl.session_handler.restore_session_mappings()
+
+        self.assertEqual(
+            persisted.cleared,
+            [("telegram::U1", "codex", "telegram_U1")],
+        )
+        self.assertEqual(
+            persisted.mappings["telegram::U1"]["codex"],
+            {"telegram_other": "codex-real"},
+        )
+
     async def test_handle_resume_session_submission_threads(self):
         settings = _StubSettingsManager()
         im_client = _StubIMClient()
         ctrl = _StubController()
         ctrl.init_minimal(im_client, settings, _StubConfig())
+        ctrl.im_client.should_use_thread_for_reply = lambda: True
         ctrl.native_session_service = _StubNativeSessionService(
             [
                 NativeResumeSession(
@@ -155,6 +210,7 @@ class ResumeSessionTests(unittest.IsolatedAsyncioTestCase):
         im_client = _StubIMClient()
         ctrl = _StubController()
         ctrl.init_minimal(im_client, settings, _StubConfig())
+        ctrl.im_client.should_use_thread_for_reply = lambda: True
 
         await ctrl.session_handler.handle_resume_session_submission(
             user_id="U999",
@@ -170,6 +226,37 @@ class ResumeSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(im_client.messages), 2)
         self.assertIn("sess_dm", im_client.messages[0][2])
         self.assertIn("Send your next message directly", im_client.messages[1][2])
+
+    async def test_handle_resume_session_submission_rejects_busy_codex_before_mapping(self):
+        settings = _StubSettingsManager()
+        im_client = _StubIMClient()
+        ctrl = _StubController()
+        ctrl.init_minimal(im_client, settings, _StubConfig(platform="telegram"))
+        busy_codex = type("CodexAgent", (), {"validate_resume_session": AsyncMock()})()
+        busy_codex.validate_resume_session.side_effect = RuntimeError(
+            "Codex session is already active in another Codex process"
+        )
+        ctrl.agent_service = type("A", (), {"agents": {"codex": busy_codex}})()
+
+        await ctrl.session_handler.handle_resume_session_submission(
+            user_id="U999",
+            channel_id="U999",
+            thread_id=None,
+            agent="codex",
+            session_id="thread_busy",
+            is_dm=True,
+            platform="telegram",
+        )
+
+        self.assertEqual(settings.set_calls, [])
+        self.assertEqual(len(im_client.messages), 1)
+        self.assertIn("already active in another Codex process", im_client.messages[0][2])
+        busy_codex.validate_resume_session.assert_awaited_once_with(
+            base_session_id="telegram_U999",
+            session_key="telegram::U999",
+            working_path="/Users/cyh/vibe-remote",
+            native_session_id="thread_busy",
+        )
 
     async def test_handle_resume_session_submission_prepares_resume_binding(self):
         settings = _StubSettingsManager()

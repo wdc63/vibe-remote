@@ -289,8 +289,9 @@ def test_run_dispatches_telegram_updates_concurrently() -> None:
 
     with patch("modules.im.telegram.telegram_api.get_me", new=AsyncMock(return_value={"result": {"username": "bot"}})):
         with patch("modules.im.telegram.telegram_api.get_updates", new=AsyncMock(side_effect=fake_get_updates)):
-            with patch.object(bot, "_handle_update", new=fake_handle):
-                asyncio.run(asyncio.wait_for(bot._run(), timeout=0.2))
+            with patch.object(bot, "_register_bot_menu", new=AsyncMock()):
+                with patch.object(bot, "_handle_update", new=fake_handle):
+                    asyncio.run(asyncio.wait_for(bot._run(), timeout=0.2))
 
     assert second_started.is_set()
     assert started == [1, 2]
@@ -623,14 +624,21 @@ def test_resume_callback_submits_selected_session() -> None:
         options=[("claude", "sess_123")],
         is_dm=False,
     )
-    bot._controller = SimpleNamespace(
-        session_handler=SimpleNamespace(handle_resume_session_submission=AsyncMock()),
-    )
+    bot.on_resume_session_callback = AsyncMock()
 
-    with patch.object(bot, "edit_message", new=AsyncMock(return_value=True)):
+    with patch.object(bot, "_delete_interaction_message", new=AsyncMock()) as delete_mock:
         asyncio.run(bot._handle_resume_callback(context, "tg_resume:0"))
 
-    bot._controller.session_handler.handle_resume_session_submission.assert_awaited_once()
+    bot.on_resume_session_callback.assert_awaited_once_with(
+        user_id="42",
+        channel_id="-100123",
+        thread_id="1",
+        agent="claude",
+        session_id="sess_123",
+        is_dm=False,
+        platform="telegram",
+    )
+    delete_mock.assert_awaited_once_with(context, "55")
 
 
 def test_routing_callback_save_persists_selected_backend() -> None:

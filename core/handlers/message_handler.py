@@ -377,6 +377,9 @@ class MessageHandler(BaseHandler):
             elif callback_data == "cmd_change_cwd":
                 await command_handlers.handle_change_cwd_modal(context)
 
+            elif callback_data == "cmd_reset_cwd":
+                await command_handlers.handle_reset_cwd(context)
+
             elif callback_data in {"cmd_new", "cmd_clear"}:
                 await command_handlers.handle_new(context)
 

@@ -311,8 +311,8 @@ class SettingsManager:
         self.update_user_settings(user_id, settings)
         return is_shown
 
-    def set_custom_cwd(self, user_id: Union[int, str], cwd: str):
-        """Set custom working directory for user"""
+    def set_custom_cwd(self, user_id: Union[int, str], cwd: Optional[str]):
+        """Set or clear the custom working directory for a user."""
         settings = self.get_user_settings(user_id)
         settings.custom_cwd = cwd
         self.update_user_settings(user_id, settings)
@@ -553,7 +553,7 @@ class MultiSettingsManager:
         manager, raw = self._resolve(settings_key)
         return manager.toggle_show_message_type(raw, message_type)
 
-    def set_custom_cwd(self, settings_key: Union[int, str], cwd: str):
+    def set_custom_cwd(self, settings_key: Union[int, str], cwd: Optional[str]):
         manager, raw = self._resolve(settings_key)
         return manager.set_custom_cwd(raw, cwd)
 
