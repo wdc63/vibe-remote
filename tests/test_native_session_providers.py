@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -158,6 +159,40 @@ def test_codex_provider_skips_empty_rollout_path(monkeypatch) -> None:
     assert called is False
     assert hydrated.last_agent_message == "Fallback title"
     assert hydrated.last_agent_tail == "Fallback title"
+
+
+def test_codex_provider_matches_windows_extended_length_cwd(tmp_path: Path) -> None:
+    db_path = tmp_path / "state.sqlite"
+    working_path = r"D:\StrideAvalonia"
+    stored_path = r"\\?\D:\StrideAvalonia"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE threads (
+                id TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                title TEXT,
+                first_user_message TEXT,
+                rollout_path TEXT,
+                cwd TEXT,
+                archived INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO threads (id, created_at, updated_at, title, first_user_message, rollout_path, cwd, archived)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("thread_1", 1_700_000_000, 1_700_000_100, "Codex session", "hello", "", stored_path, 0),
+        )
+
+    items = CodexNativeSessionProvider(db_path=str(db_path)).list_metadata(working_path)
+
+    assert [item.native_session_id for item in items] == ["thread_1"]
+    assert items[0].working_path == working_path
 
 
 def test_native_session_service_preserves_agent_visibility_when_limited() -> None:

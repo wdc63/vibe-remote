@@ -10,6 +10,23 @@ from .types import NativeResumeSession
 logger = logging.getLogger(__name__)
 
 
+def _cwd_variants(working_path: str) -> tuple[str, ...]:
+    """Return equivalent normal and Windows extended-length path forms."""
+    raw_path = str(working_path)
+    variants = [raw_path]
+
+    if raw_path.startswith("\\\\?\\UNC\\"):
+        variants.append("\\\\" + raw_path[8:])
+    elif raw_path.startswith("\\\\?\\"):
+        variants.append(raw_path[4:])
+    elif raw_path.startswith("\\\\"):
+        variants.append("\\\\?\\UNC\\" + raw_path[2:])
+    elif len(raw_path) >= 3 and raw_path[1] == ":" and raw_path[2] in ("\\", "/"):
+        variants.append("\\\\?\\" + raw_path)
+
+    return tuple(dict.fromkeys(variants))
+
+
 class CodexNativeSessionProvider(NativeSessionProvider):
     agent_name = "codex"
 
@@ -23,16 +40,18 @@ class CodexNativeSessionProvider(NativeSessionProvider):
         if not self.db_path.exists():
             return []
         items: list[NativeResumeSession] = []
+        cwd_variants = _cwd_variants(working_path)
+        placeholders = ", ".join("?" for _ in cwd_variants)
         try:
             with self._connect() as conn:
                 cursor = conn.execute(
-                    """
+                    f"""
                     SELECT id, created_at, updated_at, title, first_user_message, rollout_path
                     FROM threads
-                    WHERE cwd = ? AND archived = 0
+                    WHERE cwd IN ({placeholders}) AND archived = 0
                     ORDER BY updated_at DESC, id DESC
                     """,
-                    (working_path,),
+                    cwd_variants,
                 )
                 for session_id, created_ts, updated_ts, title, first_user_message, rollout_path in cursor.fetchall():
                     created_at = dt_from_ts(created_ts)
